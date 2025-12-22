@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>hamaguri-blur</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script type="module" src="/main.js" defer></script>
+</head>
+
+<body>
+  <div id="settings-ui" class="container">
+    <h1>hamaguri-blur</h1>
+    <div class="card">
+      <p>アクティブウィンドウ以外の領域をぼかします。</p>
+      <div class="controls">
+        <label>ブラー強度: <input type="range" id="blur-range" min="0" max="50" value="10"></label>
+        <span id="blur-value">10px</span>
+      </div>
+      <button id="close-btn">設定を閉じる</button>
+    </div>
+  </div>
+
+  <div id="overlay-container" class="overlay hidden">
+    <div id="mask-top" class="mask"></div>
+    <div id="mask-bottom" class="mask"></div>
+    <div id="mask-left" class="mask"></div>
+    <div id="mask-right" class="mask"></div>
+    <div id="hole" class="hole"></div>
+  </div>
+</body>
+
+</html>

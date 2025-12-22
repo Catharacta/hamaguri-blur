@@ -1,0 +1,98 @@
+:root {
+  --primary-color: #6366f1;
+  --bg-color: rgba(15, 23, 42, 0.9);
+  --text-color: #f8fafc;
+  --card-bg: rgba(30, 41, 59, 0.7);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter', sans-serif;
+  color: var(--text-color);
+  background: transparent;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background: var(--bg-color);
+  backdrop-filter: blur(10px);
+}
+
+.card {
+  background: var(--card-bg);
+  padding: 2rem;
+  border-radius: 1rem;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  text-align: center;
+  max-width: 400px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+h1 {
+  margin-top: 0;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+
+.controls {
+  margin: 1.5rem 0;
+}
+
+button {
+  background: var(--primary-color);
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+button:hover {
+  opacity: 0.9;
+}
+
+/* オーバーレイ表示 */
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: transparent;
+  z-index: 1000;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.mask {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.5);
+  /* 穴以外の暗い部分 */
+  pointer-events: none;
+  z-index: 1001;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* くり抜き部分（旧）はデバッグ用枠線として再利用可能 */
+.hole {
+  position: absolute;
+  border: 2px solid #ef4444;
+  /* 明るい赤 */
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 1002;
+  display: none;
+  /* 初期は非表示 */
+}
