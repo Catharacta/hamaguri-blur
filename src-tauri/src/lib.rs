@@ -5,92 +5,21 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetWindowLongW, SetWindowLongW, SetWindowPos, ShowWindow, GWL_EXSTYLE, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SW_SHOWMAXIMIZED, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+};
 
 #[tauri::command]
 fn js_log(message: String) {
     println!("JS LOG: {}", message);
 }
 
-#[tauri::command]
-fn get_active_window(window: tauri::Window) -> Option<window_manager::WindowInfo> {
-    let hwnd_exclude = window.hwnd().ok().map(|h| h.0 as isize);
-    let mut info = window_manager::get_active_window_info(hwnd_exclude);
-
-    if let Some(ref mut i) = info {
-        let target_monitor = window
-            .monitor_from_point(i.rect.left as f64, i.rect.top as f64)
-            .ok()
-            .flatten();
-
-        if let Some(ref tm) = target_monitor {
-            let tm_pos = tm.position();
-            let tm_size = tm.size();
-
-            if let (Ok(curr_pos), Ok(curr_size)) = (window.outer_position(), window.inner_size()) {
-                if curr_pos.x != tm_pos.x
-                    || curr_pos.y != tm_pos.y
-                    || curr_size.width != tm_size.width
-                    || curr_size.height != tm_size.height
-                {
-                    let _ = window.set_position(tauri::Position::Physical(*tm_pos));
-                    let _ = window.set_size(tauri::Size::Physical(*tm_size));
-
-                    // 移動・リサイズ後、確実にクリック透過を再適用
-                    let _ = window.set_ignore_cursor_events(true);
-                    if let Ok(hwnd) = window.hwnd() {
-                        set_click_through(HWND(hwnd.0));
-                    }
-                    println!(
-                        "Rust: Resynced overlay to monitor: {:?} at {:?}",
-                        tm.name(),
-                        tm_pos
-                    );
-                }
-            }
-        }
-
-        // オーバーレイの現在の物理位置を取得
-        // ターゲットモニタがある場合は、その位置（期待される位置）を基準にする
-        // これにより、オーバーレイ自体の配置が数ピクセルずれていても「穴」の位置は正確になる
-        let (pos_x, pos_y) = if let Some(ref tm) = target_monitor {
-            let p = tm.position();
-            (p.x, p.y)
-        } else if let Ok(pos) = window.outer_position() {
-            (pos.x, pos.y)
-        } else {
-            (0, 0)
-        };
-
-        // 物理ピクセル単位で減算して相対座標にする
-        i.rect.left -= pos_x;
-        i.rect.right -= pos_x;
-        i.rect.top -= pos_y;
-        i.rect.bottom -= pos_y;
-
-        // Windows の不可視境界線や DPI スケーリングによるズレを補正するためのオフセット（物理ピクセル）
-        // ユーザー報告の「右ずれ」を解消するため、左方向（マイナス）に調整
-        const OFFSET_X: i32 = -7; // 左に7pxずらす
-        const OFFSET_Y: i32 = 0;
-
-        i.rect.left += OFFSET_X;
-        i.rect.right += OFFSET_X;
-        i.rect.top += OFFSET_Y;
-        i.rect.bottom += OFFSET_Y;
-
-        let sf = window.scale_factor().unwrap_or(1.0);
-        println!(
-            "Rust: Final Local Rect (Rel to {},{}, Scale:{}): L:{}, T:{}, R:{}, B:{}",
-            pos_x, pos_y, sf, i.rect.left, i.rect.top, i.rect.right, i.rect.bottom
-        );
-    }
-
-    info
+/// アクティブウィンドウの HWND を取得（ブラーウィンドウ自身を除外）
+fn get_active_window_hwnd(exclude_hwnd: Option<isize>) -> Option<HWND> {
+    let info = window_manager::get_active_window_info(exclude_hwnd);
+    info.map(|i| HWND(i.hwnd as *mut _))
 }
-
-use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongW, SetWindowLongW, ShowWindow, GWL_EXSTYLE, SW_SHOWNOACTIVATE, WS_EX_LAYERED,
-    WS_EX_TRANSPARENT,
-};
 
 fn set_click_through(hwnd: HWND) {
     unsafe {
@@ -103,14 +32,30 @@ fn set_click_through(hwnd: HWND) {
     }
 }
 
-fn create_overlay_window(app: &AppHandle) -> tauri::Result<()> {
-    let window = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("index.html".into()))
-        .title("hamaguri-blur-overlay")
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .visible(false)
-        .build()?;
+/// ブラーウィンドウをアクティブウィンドウの直下に配置
+fn set_blur_below_active(blur_hwnd: HWND, active_hwnd: HWND) {
+    unsafe {
+        // アクティブウィンドウの直下にブラーウィンドウを配置
+        let _ = SetWindowPos(
+            blur_hwnd,
+            Some(active_hwnd),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+}
+
+fn create_blur_window(app: &AppHandle) -> tauri::Result<()> {
+    let window =
+        WebviewWindowBuilder::new(app, "blur_overlay", WebviewUrl::App("blur.html".into()))
+            .title("hamaguri-blur")
+            .decorations(false)
+            .transparent(true)
+            .visible(false)
+            .build()?;
 
     let _ = window.set_ignore_cursor_events(true);
 
@@ -118,7 +63,46 @@ fn create_overlay_window(app: &AppHandle) -> tauri::Result<()> {
         set_click_through(HWND(hwnd.0));
     }
 
+    // window-vibrancy で Acrylic ブラー効果を適用
+    // RGBA: (R, G, B, A) - A は透明度（0=完全透明, 255=不透明）
+    match window_vibrancy::apply_acrylic(&window, Some((18, 18, 18, 200))) {
+        Ok(_) => println!("Acrylic blur effect applied successfully"),
+        Err(e) => {
+            println!("Failed to apply acrylic: {:?}", e);
+            // フォールバック: 通常のブラーを試す
+            if let Err(e2) = window_vibrancy::apply_blur(&window, Some((18, 18, 18, 200))) {
+                println!("Failed to apply blur fallback: {:?}", e2);
+            } else {
+                println!("Blur fallback applied successfully");
+            }
+        }
+    }
+
     Ok(())
+}
+
+fn start_zorder_loop(app_handle: AppHandle) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+
+            if let Some(blur_window) = app_handle.get_webview_window("blur_overlay") {
+                if !blur_window.is_visible().unwrap_or(false) {
+                    continue;
+                }
+
+                let blur_hwnd = match blur_window.hwnd() {
+                    Ok(h) => HWND(h.0),
+                    Err(_) => continue,
+                };
+
+                // アクティブウィンドウを取得（ブラーウィンドウ自身を除外）
+                if let Some(active_hwnd) = get_active_window_hwnd(Some(blur_hwnd.0 as isize)) {
+                    set_blur_below_active(blur_hwnd, active_hwnd);
+                }
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -136,28 +120,30 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
-            create_overlay_window(app.handle())?;
+            create_blur_window(app.handle())?;
+            start_zorder_loop(app.handle().clone());
 
-            let ctrl_b_shortcut = "Alt+B".parse::<Shortcut>().unwrap();
+            let alt_b_shortcut = "Alt+B".parse::<Shortcut>().unwrap();
             app.global_shortcut()
-                .on_shortcut(ctrl_b_shortcut, |app, shortcut, event| {
-                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed
-                        && shortcut.id() == "alt+b".parse::<Shortcut>().unwrap().id()
-                    {
-                        if let Some(overlay) = app.get_webview_window("overlay") {
-                            let is_visible = overlay.is_visible().unwrap_or(false);
+                .on_shortcut(alt_b_shortcut, |app, _shortcut, event| {
+                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        if let Some(blur_window) = app.get_webview_window("blur_overlay") {
+                            let is_visible = blur_window.is_visible().unwrap_or(false);
                             if is_visible {
-                                let _ = overlay.hide();
-                                println!("Rust: Overlay hidden by shortcut");
-                            } else if let Ok(hwnd) = overlay.hwnd() {
-                                // 表示するタイミングでクリック透過を再度確実にする
-                                let _ = overlay.set_ignore_cursor_events(true);
-                                set_click_through(HWND(hwnd.0));
-
-                                unsafe {
-                                    let _ = ShowWindow(HWND(hwnd.0), SW_SHOWNOACTIVATE);
+                                let _ = blur_window.hide();
+                                println!("Blur window hidden");
+                            } else {
+                                // フルスクリーン表示（Windows API で直接最大化）
+                                if let Ok(hwnd) = blur_window.hwnd() {
+                                    let hwnd = HWND(hwnd.0);
+                                    let _ = blur_window.set_ignore_cursor_events(true);
+                                    set_click_through(hwnd);
+                                    unsafe {
+                                        // SW_SHOWMAXIMIZED で最大化表示
+                                        let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+                                    }
                                 }
-                                println!("Rust: Overlay shown by shortcut");
+                                println!("Blur window shown");
                             }
                         }
                     }
@@ -186,11 +172,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            open_settings,
-            get_active_window,
-            js_log
-        ])
+        .invoke_handler(tauri::generate_handler![open_settings, js_log])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
