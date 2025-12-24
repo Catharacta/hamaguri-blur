@@ -26,4 +26,5 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_Window
 wgpu = "27.0.1"
 tauri-plugin-shell = "2.2.0"
 tauri-plugin-global-shortcut = "2.2.1"
+window-vibrancy = "0.5"
 
